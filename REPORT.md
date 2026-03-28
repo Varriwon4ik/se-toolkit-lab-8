@@ -191,11 +191,49 @@ The skill prompt teaches the agent:
 
 ## Task 2A — Deployed agent
 
-<!-- Paste a short nanobot startup log excerpt showing the gateway started inside Docker -->
+Nanobot gateway startup log excerpt:
+
+```
+Starting nanobot gateway with resolved config: /app/config.resolved.json
+Workspace: /app/workspace
+🐈 Starting nanobot gateway version 0.1.4.post6 on port 18790...
+  Created HEARTBEAT.md
+  Created AGENTS.md
+  Created TOOLS.md
+  Created SOUL.md
+  Created USER.md
+  Created memory/MEMORY.md
+  Created memory/HISTORY.md
+2026-03-28 10:45:20.559 | INFO     | nanobot.cron.service:start:202 - Cron service started with 0 jobs
+2026-03-28 10:45:20.559 | INFO     | nanobot.heartbeat.service:start:124 - Heartbeat started (every 1800s)
+```
+
+The gateway is running. (Note: "No channels enabled" warning appears until we install the webchat channel plugin in Part B.)
 
 ## Task 2B — Web client
 
-<!-- Screenshot of a conversation with the agent in the Flutter web app -->
+**WebSocket endpoint test:**
+
+The WebSocket endpoint at `ws://localhost:42002/ws/chat` is accessible and returns "426 Upgrade Required" when accessed via HTTP (expected behavior for WebSocket endpoints).
+
+**Flutter web client:**
+
+The Flutter web client is accessible at `http://localhost:42002/flutter/`. 
+
+To test:
+1. Open `http://<your-vm-ip>:42002/flutter` in a browser
+2. Log in with your `NANOBOT_ACCESS_KEY` (set in `.env.docker.secret`)
+3. Ask the agent questions like "What can you do?" or "What labs are available?"
+
+**Files created/modified:**
+
+- `nanobot/entrypoint.py` — Runtime config resolver for Docker deployment
+- `nanobot/Dockerfile` — Multi-stage build with uv
+- `nanobot/config.json` — Added webchat channel config
+- `nanobot/pyproject.toml` — Added nanobot-webchat dependencies
+- `docker-compose.yml` — Uncommented nanobot and client-web-flutter services
+- `caddy/Caddyfile` — Uncommented `/ws/chat` and `/flutter` routes
+- `nanobot-websocket-channel/` — Git submodule for WebSocket channel and Flutter client
 
 ## Task 3A — Structured logging
 
