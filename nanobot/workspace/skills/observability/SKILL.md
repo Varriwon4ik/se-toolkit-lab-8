@@ -42,13 +42,53 @@ VictoriaLogs uses LogsQL for querying. Common patterns:
 3. Summarize: which services have errors, what the errors are
 4. If traces are mentioned, call `traces_list` to find related traces
 
-### "What went wrong with the last request?"
+### "What went wrong?" or "Check system health"
 
-1. Call `logs_search` with `query="severity:ERROR"` and `limit=10`
-2. Look for the most recent error
-3. Extract the `trace_id` from the error log
-4. Call `traces_get` with that `trace_id` to see the full trace
-5. Summarize: which span failed, what the error was
+This is a **one-shot investigation** — chain log and trace tools together:
+
+1. **Search recent error logs first:**
+   ```
+   logs_search(query="severity:ERROR", limit=10, start="5m")
+   ```
+
+2. **Extract the trace_id** from the most recent error log entry
+
+3. **Fetch the full trace:**
+   ```
+   traces_get(trace_id="<extracted_trace_id>")
+   ```
+
+4. **Analyze the trace:**
+   - Look for spans with `has_error=true` or an `error` tag
+   - Identify which operation failed (e.g., "SELECT db-lab-8", "GET /items/")
+   - Note the error message from the span tags
+
+5. **Summarize concisely** — combine log and trace evidence:
+   - What the error was (from logs)
+   - Where it occurred (from trace span)
+   - When it happened (timestamp)
+   - Root cause hypothesis (e.g., "PostgreSQL unreachable", "Connection refused")
+
+**Example response format:**
+> "The last request failed at {timestamp}. Logs show error: '{error_message}' during {operation}. Trace {trace_id} shows the failure occurred in the {span_operation} span after {duration}ms. Root cause: {root_cause}."
+
+### "Show me logs for the backend service"
+
+1. Call `logs_search` with query=`_stream:{service.name="Learning Management Service"}`
+2. Present the logs in a readable format
+
+### "Are there any traces with errors?"
+
+1. Call `traces_list` with `service="Learning Management Service"` and `limit=10`
+2. Look for traces with `has_error=true`
+3. For each error trace, optionally call `traces_get` for details
+
+### "Debug this trace ID: abc123..."
+
+1. Call `traces_get` with the provided `trace_id`
+2. Analyze the span hierarchy
+3. Identify which span has the error (look for `has_error=true` or `error` tag)
+4. Report the failing operation and error message
 
 ### "Show me logs for the backend service"
 

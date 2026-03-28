@@ -1,7 +1,7 @@
 """Router for item endpoints — reference implementation."""
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.database import get_session
@@ -16,10 +16,17 @@ async def get_items(session: AsyncSession = Depends(get_session)):
     """Get all items."""
     try:
         return await read_items(session)
-    except Exception as exc:
+    except SQLAlchemyError as exc:
+        # Database errors should return 500, not mask as 404
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Items not found",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database error: {str(exc)}",
+        ) from exc
+    except Exception as exc:
+        # Other unexpected errors also return 500
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Internal server error: {str(exc)}",
         ) from exc
 
 
