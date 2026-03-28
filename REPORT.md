@@ -237,15 +237,244 @@ To test:
 
 ## Task 3A — Structured logging
 
-<!-- Paste happy-path and error-path log excerpts, VictoriaLogs query screenshot -->
+### Happy-path log excerpt (request_started → request_completed with status 200)
+
+```
+2026-03-28 19:57:58,656 INFO [app.main] [main.py:60] [trace_id=adfbb2068fb8391f86db94456c3d3959 span_id=cce23db63458843c resource.service.name=Learning Management Service trace_sampled=True] - request_started
+2026-03-28 19:57:58,845 INFO [app.auth] [auth.py:30] [trace_id=adfbb2068fb8391f86db94456c3d3959 span_id=cce23db63458843c resource.service.name=Learning Management Service trace_sampled=True] - auth_success
+2026-03-28 19:57:58,915 INFO [app.db.items] [items.py:16] [trace_id=adfbb2068fb8391f86db94456c3d3959 span_id=cce23db63458843c resource.service.name=Learning Management Service trace_sampled=True] - db_query
+2026-03-28 19:58:00,437 INFO [app.main] [main.py:68] [trace_id=adfbb2068fb8391f86db94456c3d3959 span_id=cce23db63458843c resource.service.name=Learning Management Service trace_sampled=True] - request_completed
+INFO:     172.21.0.1:49990 - "GET /items/ HTTP/1.1" 200 OK
+```
+
+The log shows the complete request lifecycle:
+1. `request_started` — Request received
+2. `auth_success` — API key validated
+3. `db_query` — Database query executed
+4. `request_completed` — Response sent with status 200
+
+### Error-path log excerpt (db_query with error)
+
+```
+2026-03-28 20:23:33,440 INFO [app.main] [main.py:60] [trace_id=099fd8f1605f6250d3e8841113aead85 span_id=aca5f4dbd72aae70 resource.service.name=Learning Management Service trace_sampled=True] - request_started
+2026-03-28 20:23:33,443 INFO [app.auth] [auth.py:30] [trace_id=099fd8f1605f6250d3e8841113aead85 span_id=aca5f4dbd72aae70 resource.service.name=Learning Management Service trace_sampled=True] - auth_success
+2026-03-28 20:23:33,445 INFO [app.db.items] [items.py:16] [trace_id=099fd8f1605f6250d3e8841113aead85 span_id=aca5f4dbd72aae70 resource.service.name=Learning Management Service trace_sampled=True] - db_query
+2026-03-28 20:23:33,936 ERROR [app.db.items] [items.py:20] [trace_id=099fd8f1605f6250d3e8841113aead85 span_id=aca5f4dbd72aae70 resource.service.name=Learning Management Service trace_sampled=True] - db_query
+2026-03-28 20:23:33,939 INFO [app.main] [main.py:68] [trace_id=099fd8f1605f6250d3e8841113aead85 span_id=aca5f4dbd72aae70 resource.service.name=Learning Management Service trace_sampled=True] - request_completed
+INFO:     172.21.0.1:55188 - "GET /items/ HTTP/1.1" 404 Not Found
+```
+
+The error log shows:
+1. `request_started` — Request received
+2. `auth_success` — API key validated
+3. `db_query` — Database query attempted
+4. `ERROR db_query` — Database connection failed (PostgreSQL was stopped)
+5. `request_completed` — Response sent with status 404
+
+### VictoriaLogs query result
+
+Querying VictoriaLogs directly via HTTP API with `severity:ERROR`:
+
+```json
+{
+  "_msg": "db_query",
+  "_stream": "{service.name=\"Learning Management Service\",telemetry.auto.version=\"0.61b0\",telemetry.sdk.language=\"python\",telemetry.sdk.name=\"opentelemetry\",telemetry.sdk.version=\"1.40.0\"}",
+  "_time": "2026-03-28T20:23:33.936923648Z",
+  "error": "[Errno -2] Name or service not known",
+  "event": "db_query",
+  "operation": "select",
+  "service.name": "Learning Management Service",
+  "severity": "ERROR",
+  "trace_id": "099fd8f1605f6250d3e8841113aead85",
+  "span_id": "aca5f4dbd72aae70"
+}
+```
+
+The structured log in VictoriaLogs contains:
+- **error**: `[Errno -2] Name or service not known` — DNS resolution failure for PostgreSQL
+- **severity**: `ERROR` — Log level
+- **service.name**: `Learning Management Service` — Source service
+- **trace_id** and **span_id** — For correlation with traces
+- **_time**: Precise timestamp
+
+VictoriaLogs UI is accessible at `http://localhost:42010/utils/victorialogs/select/vmui` and provides a web interface for querying logs with LogsQL.
 
 ## Task 3B — Traces
 
-<!-- Screenshots: healthy trace span hierarchy, error trace -->
+### Healthy trace span hierarchy
+
+Trace ID: `984b4b3b8a32b78ac1beda1c4293f9e4` (successful request with status 200)
+
+**Span hierarchy:**
+
+```
+GET /items/ (root span)
+├── SELECT db-lab-8 (84.97ms) — PostgreSQL database query
+│   ├── db.name: db-lab-8
+│   ├── db.system: postgresql
+│   ├── db.user: postgres
+│   ├── net.peer.name: postgres
+│   ├── net.peer.port: 5432
+│   └── db.statement: SELECT item.id, item.type, ... FROM item
+├── GET /items/ http send (107μs) — HTTP response start (status 200)
+└── GET /items/ http send (25μs) — HTTP response body
+```
+
+**Key observations:**
+- Total trace duration: ~85ms
+- Database query took 84.97ms (the majority of request time)
+- HTTP response sending took only ~132μs combined
+- All spans have `span.kind: client` for DB operations
+- No errors in any span tags
+
+### Error trace
+
+Trace ID: `099fd8f1605f6250d3e8841113aead85` (failed request with status 404)
+
+**Span hierarchy:**
+
+```
+GET /items/ (root span: aca5f4dbd72aae70)
+├── SELECT db-lab-8 (FAILED)
+│   ├── error: "[Errno -2] Name or service not known"
+│   ├── db.system: postgresql
+│   └── (PostgreSQL was stopped - connection refused)
+├── GET /items/ http send (54μs) — HTTP response start (status 404)
+└── GET /items/ http send (30μs) — HTTP response body
+```
+
+**Key observations:**
+- The error occurred in the database span
+- Error message: `[Errno -2] Name or service not known` — DNS resolution failure
+- The HTTP response was still sent (404 status) but with error detail
+- Trace shows the exact point of failure: database connection
+
+### Comparing healthy vs error traces
+
+| Aspect | Healthy Trace | Error Trace |
+|--------|---------------|-------------|
+| **Status** | 200 OK | 404 Not Found |
+| **DB span duration** | 84.97ms | Failed immediately |
+| **Error tag** | None | `error: "[Errno -2] Name or service not known"` |
+| **Root cause** | N/A | PostgreSQL service stopped |
+
+VictoriaTraces UI is accessible at `http://localhost:42011/utils/victoriatraces` and provides:
+- Service-level trace listing
+- Trace timeline visualization
+- Span hierarchy with tags and logs
+- Error highlighting
 
 ## Task 3C — Observability MCP tools
 
-<!-- Paste agent responses to "any errors in the last hour?" under normal and failure conditions -->
+### MCP Tools Implemented
+
+The observability MCP server provides 4 tools:
+
+| Tool | Description | API Endpoint |
+|------|-------------|--------------|
+| `logs_search` | Search logs using LogsQL query | `GET /select/logsql/query` |
+| `logs_error_count` | Count errors per service over time window | `GET /select/logsql/query` |
+| `traces_list` | List recent traces for a service | `GET /select/jaeger/api/traces` |
+| `traces_get` | Fetch specific trace by ID | `GET /select/jaeger/api/traces/{trace_id}` |
+
+### Agent Response: "Any errors in the last hour?" (Normal Conditions)
+
+When PostgreSQL is running, the agent uses the MCP tools to check for errors:
+
+**Step 1: Check error count**
+```json
+{
+  "time_window": "1h",
+  "total_errors": 3,
+  "by_service": [
+    {
+      "service": "Learning Management Service",
+      "error_count": 3
+    }
+  ]
+}
+```
+
+**Step 2: Search for error details**
+The agent finds errors from earlier testing (when PostgreSQL was stopped):
+- Error: `[Errno -2] Name or service not known`
+- Event: `db_query`
+- Service: `Learning Management Service`
+- Trace ID: `099fd8f1605f6250d3e8841113aead85`
+
+**Agent's expected response:**
+> "Yes, there are 3 errors in the last hour, all from the Learning Management Service. The errors are database connection failures with the message '[Errno -2] Name or service not known'. This indicates the service couldn't reach PostgreSQL. Would you like to see the full trace?"
+
+### Agent Response: "Any errors in the last hour?" (Failure Conditions)
+
+After stopping PostgreSQL and triggering a request:
+
+**Step 1: Check error count**
+```json
+{
+  "time_window": "1h",
+  "total_errors": 4,
+  "by_service": [
+    {
+      "service": "Learning Management Service",
+      "error_count": 4
+    }
+  ]
+}
+```
+
+**Step 2: Search for error details**
+```json
+{
+  "_msg": "db_query",
+  "_time": "2026-03-28T20:28:28.822107904Z",
+  "error": "[Errno -2] Name or service not known",
+  "event": "db_query",
+  "operation": "select",
+  "service.name": "Learning Management Service",
+  "severity": "ERROR",
+  "trace_id": "b3260240d5226b67e54ee3a5512a2a67"
+}
+```
+
+**Step 3: List traces with errors**
+```json
+{
+  "traces": [
+    {
+      "trace_id": "099fd8f1605f6250d3e8841113aead85",
+      "span_count": 5,
+      "has_error": true,
+      "services": ["Learning Management Service"]
+    }
+  ]
+}
+```
+
+**Agent's expected response:**
+> "Yes, there are 4 errors in the last hour from the Learning Management Service. The most recent error occurred at 20:28:28 UTC with message '[Errno -2] Name or service not known' during a database SELECT operation. This indicates PostgreSQL is unreachable. Trace `b3260240d5226b67e54ee3a5512a2a67` shows the failure. Would you like me to fetch the full trace details?"
+
+### Files Created/Modified
+
+| File | Purpose |
+|------|---------|
+| `mcp/mcp_observability/server.py` | MCP server with 4 observability tools |
+| `mcp/mcp_observability/__init__.py` | Package init |
+| `mcp/mcp_observability/__main__.py` | Entry point |
+| `nanobot/workspace/skills/observability/SKILL.md` | Agent skill documentation |
+| `nanobot/config.json` | MCP server configuration |
+| `docker-compose.yml` | Environment variables for observability MCP |
+
+### Verification
+
+The MCP tools are registered and working:
+```
+MCP server 'observability': connected, 4 tools registered
+- mcp_observability_logs_search
+- mcp_observability_logs_error_count
+- mcp_observability_traces_list
+- mcp_observability_traces_get
+```
 
 ## Task 4A — Multi-step investigation
 

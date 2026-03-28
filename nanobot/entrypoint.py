@@ -71,6 +71,18 @@ def resolve_config() -> str:
         if lms_api_key:
             config["tools"]["mcpServers"]["lms"]["env"]["NANOBOT_LMS_API_KEY"] = lms_api_key
 
+    # Resolve observability MCP server env vars
+    victorialogs_url = os.environ.get("VICTORIALOGS_URL", "")
+    victoriatraces_url = os.environ.get("VICTORIATRACES_URL", "")
+
+    if "tools" in config and "mcpServers" in config["tools"] and "observability" in config["tools"]["mcpServers"]:
+        if "env" not in config["tools"]["mcpServers"]["observability"]:
+            config["tools"]["mcpServers"]["observability"]["env"] = {}
+        if victorialogs_url:
+            config["tools"]["mcpServers"]["observability"]["env"]["VICTORIALOGS_URL"] = victorialogs_url
+        if victoriatraces_url:
+            config["tools"]["mcpServers"]["observability"]["env"]["VICTORIATRACES_URL"] = victoriatraces_url
+
     # Write resolved config
     with open(resolved_path, "w") as f:
         json.dump(config, f, indent=2)
