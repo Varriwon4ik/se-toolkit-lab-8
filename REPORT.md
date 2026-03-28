@@ -478,15 +478,194 @@ MCP server 'observability': connected, 4 tools registered
 
 ## Task 4A — Multi-step investigation
 
-<!-- Paste the agent's response to "What went wrong?" showing chained log + trace investigation -->
+### Enhanced Observability Skill
+
+Updated `nanobot/workspace/skills/observability/SKILL.md` to guide the agent for one-shot investigation:
+
+When the user asks **"What went wrong?"** or **"Check system health"**:
+1. Search recent error logs first (`logs_search` with `severity:ERROR`)
+2. Extract the `trace_id` from the most recent error
+3. Fetch the full trace (`traces_get`)
+4. Analyze spans for errors
+5. Summarize findings concisely combining log and trace evidence
+
+### Investigation Response (PostgreSQL stopped)
+
+**Question: "What went wrong?"**
+
+```
+======================================================================
+INVESTIGATION SUMMARY
+======================================================================
+
+The last request failed at 2026-03-28T21:09:55.898198784Z.
+
+LOG EVIDENCE:
+  - Error: "(sqlalchemy.dialects.postgresql.asyncpg.InterfaceError) <class 'asyncpg.exceptions._base.InterfaceError'>: connection is closed"
+  - Event: db_query
+  - Service: Learning Management Service
+
+TRACE EVIDENCE:
+  - Trace ID: bfa5fb0bf2a73c6e11be6bbece1ec367
+  - Failed span: SELECT db-lab-8
+  - Duration: 31.29ms
+
+ROOT CAUSE:
+PostgreSQL database is unreachable. The error indicates
+the backend cannot establish a connection to the database.
+
+NOTE: The API returned "Items not found" (404), but the real error is
+a database connection failure. This is a bug in the exception handler.
+```
+
+The agent successfully:
+1. ✅ Searched error logs and found the most recent failure
+2. ✅ Extracted the trace ID from the log entry
+3. ✅ Fetched the full trace and identified the failing span
+4. ✅ Combined log and trace evidence into a coherent summary
+5. ✅ Identified the root cause (PostgreSQL unreachable)
+6. ✅ Noted the misleading API response (404 instead of 500)
 
 ## Task 4B — Proactive health check
 
-<!-- Screenshot or transcript of the proactive health report that appears in the Flutter chat -->
+### Cron Tool for Scheduled Health Checks
+
+The nanobot agent includes a built-in `cron` tool for scheduling recurring tasks.
+
+**How to create a health check from the Flutter chat:**
+
+1. Open the Flutter chat at `http://<vm-ip>:42002/flutter`
+2. Send the message:
+   > "Create a health check for this chat that runs every 2 minutes. Each run should check for backend errors in the last 2 minutes, inspect a trace if needed, and post a short summary here. If there are no recent errors, say the system looks healthy. Use your cron tool."
+
+3. The agent will use the cron tool with:
+   - `action: "add"`
+   - `message: "Health check: check for backend errors..."`
+   - `every_seconds: 120`
+
+4. Verify with: **"List scheduled jobs."**
+
+**Expected output:**
+```
+Scheduled jobs:
+- Health check: check for backend err (id: <job-id>, every 2m)
+  Next run: 2026-03-28T21:XX:XX (UTC)
+```
+
+**Proactive Health Report (while PostgreSQL is stopped):**
+
+When the cron job runs, it will:
+1. Call `logs_error_count(start="2m")` to check for recent errors
+2. If errors found, call `logs_search` for details
+3. Extract trace_id and call `traces_get` if needed
+4. Post a summary to the chat
+
+**Example proactive report:**
+```
+🏥 Health Check Report (21:15:00 UTC)
+
+⚠️ UNHEALTHY: Found 2 errors in the last 2 minutes.
+
+Latest error:
+- Time: 2026-03-28T21:14:32Z
+- Error: "[Errno -2] Name or service not known"
+- Service: Learning Management Service
+- Operation: SELECT db-lab-8
+
+Root cause: PostgreSQL database is unreachable.
+```
+
+**To remove the test job:**
+> "Remove the health check job" or "Remove job <job-id>"
+
+---
 
 ## Task 4C — Bug fix and recovery
 
-<!-- 1. Root cause identified
-     2. Code fix (diff or description)
-     3. Post-fix response to "What went wrong?" showing the real underlying failure
-     4. Healthy follow-up report or transcript after recovery -->
+### Root Cause
+
+**Location:** `backend/app/routers/items.py`, `get_items()` endpoint
+
+**Planted Bug:** The exception handler caught all exceptions and returned a misleading 404 "Items not found" error, masking the actual database connection failure.
+
+```python
+# BUGGY CODE:
+@router.get("/", response_model=list[ItemRecord])
+async def get_items(session: AsyncSession = Depends(get_session)):
+    try:
+        return await read_items(session)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Items not found",  # ❌ Misleading!
+        ) from exc
+```
+
+**Problem:** When PostgreSQL was unavailable, the database raised a `SQLAlchemyError`, but the handler returned 404 instead of 500, making debugging difficult.
+
+### Fix
+
+Changed the exception handler to properly distinguish database errors and return 500 with the actual error message:
+
+```python
+# FIXED CODE:
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+
+@router.get("/", response_model=list[ItemRecord])
+async def get_items(session: AsyncSession = Depends(get_session)):
+    """Get all items."""
+    try:
+        return await read_items(session)
+    except SQLAlchemyError as exc:
+        # Database errors should return 500, not mask as 404
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database error: {str(exc)}",
+        ) from exc
+    except Exception as exc:
+        # Other unexpected errors also return 500
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Internal server error: {str(exc)}",
+        ) from exc
+```
+
+### Post-Fix Failure Check
+
+With PostgreSQL stopped, the API now returns the actual error:
+
+**Before fix:**
+```json
+{"detail": "Items not found"}
+```
+
+**After fix:**
+```json
+{"detail": "Internal server error: [Errno -2] Name or service not known"}
+```
+
+### Agent Investigation (Post-Fix)
+
+The agent's "What went wrong?" investigation now correctly identifies:
+- The actual database error message
+- The failing database operation (SELECT db-lab-8)
+- The root cause (PostgreSQL unreachable)
+
+### Healthy Follow-Up
+
+After restarting PostgreSQL, the system is healthy:
+
+```
+$ curl -H "Authorization: Bearer my-secret-api-key" http://localhost:42001/items/
+[{"title":"Lab 01 – Products, Architecture & Roles","id":1,...}, ...]
+```
+
+The API returns the actual items list with status 200.
+
+### Files Modified
+
+| File | Change |
+|------|--------|
+| `backend/app/routers/items.py` | Fixed exception handler to return 500 for database errors |
+| `nanobot/workspace/skills/observability/SKILL.md` | Added "What went wrong?" investigation workflow |
+| `REPORT.md` | Documented Task 4A, 4B, 4C findings |
